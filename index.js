@@ -33,7 +33,10 @@ const manifest = {
   resources: ["subtitles"],
   types: ["movie", "series"],
   catalogs: [],
-  idPrefixes: ["tt"]
+  idPrefixes: ["tt"],
+
+  // ✅ THIS LINE IS REQUIRED
+  endpoint: "https://subsource-addon.onrender.com"
 };
 
 const builder = new addonBuilder(manifest);
