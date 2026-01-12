@@ -147,7 +147,7 @@ app.get("/download/:subtitleId", async (req, res) => {
 
 /* --- Mount Stremio SDK middleware --- */
 const addonInterface = builder.getInterface();
-app.use(addonInterface);   // ✅ Correct for ESM SDK
+app.use(addonInterface.router);
 
 /* --- Start server --- */
 app.listen(PORT, "0.0.0.0", () => {
