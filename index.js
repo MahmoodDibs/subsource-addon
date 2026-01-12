@@ -147,7 +147,21 @@ app.get("/download/:subtitleId", async (req, res) => {
 
 /* --- Mount Stremio SDK middleware --- */
 const addonInterface = builder.getInterface();
-app.use(addonInterface.router);
+
+console.log("🔧 addonInterface type:", typeof addonInterface);
+console.log("🔧 addonInterface keys:", Object.keys(addonInterface || {}));
+
+if (typeof addonInterface === "function") {
+  app.use(addonInterface); 
+  console.log("✅ Mounted addonInterface directly");
+} 
+else if (addonInterface.router) {
+  app.use(addonInterface.router);
+  console.log("✅ Mounted addonInterface.router");
+} 
+else {
+  console.error("❌ Invalid addonInterface shape:", addonInterface);
+}
 
 /* --- Start server --- */
 app.listen(PORT, "0.0.0.0", () => {
