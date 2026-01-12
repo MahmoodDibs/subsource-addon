@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import cors from "cors";
 import StremioSDK from "stremio-addon-sdk";
 
 const { addonBuilder } = StremioSDK;
@@ -95,38 +96,31 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
 /* ================= Express Server ================= */
 
 const app = express();
+app.use(cors()); // ✅ Full CORS support
 
-/* --- Manifest route --- */
+/* --- Manifest --- */
 app.get("/manifest.json", (req, res) => {
-  res.setHeader("Content-Type", "application/json");
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.status(200).send(JSON.stringify(manifest));
+  res.json(manifest);
 });
 
-/* --- Subtitles route (WITH CORS FIX) --- */
+/* --- Stremio subtitles endpoint --- */
 const addonInterface = builder.getInterface();
 
 app.get("/subtitles/:type/:id.json", async (req, res) => {
-  // ✅ CORS headers so Stremio webview can call this endpoint
-  res.setHeader("Content-Type", "application/json");
-  res.setHeader("Access-Control-Allow-Origin", "*");
-
   try {
     const result = await addonInterface.runSubtitlesHandler({
       type: req.params.type,
       id: req.params.id
     });
-    res.status(200).send(JSON.stringify(result));
+    res.json(result);
   } catch (err) {
     console.error("❌ Handler error:", err);
-    res.status(200).send(JSON.stringify({ subtitles: [] }));
+    res.json({ subtitles: [] });
   }
 });
 
-/* --- Subtitle download route (WITH CORS FIX) --- */
+/* --- Subtitle download endpoint --- */
 app.get("/download/:subtitleId", async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-
   try {
     const subtitleId = req.params.subtitleId;
     const lang = String(req.query.lang || "eng");
@@ -155,13 +149,14 @@ app.get("/download/:subtitleId", async (req, res) => {
 
     res.setHeader("Content-Type", contentType);
     res.send(best.data);
+
   } catch (err) {
     console.error("❌ Download error:", err.message);
     res.status(500).send("Subtitle download failed");
   }
 });
 
-/* --- Start server --- */
+/* --- Start Server --- */
 app.listen(PORT, "0.0.0.0", () => {
   console.log("✅ Server running on port", PORT);
   console.log("🌍 Manifest:", `${BASE_URL}/manifest.json`);
