@@ -15,10 +15,6 @@ import {
 import { toStremioLang } from "./language.js";
 
 const API_KEY = process.env.SUBSOURCE_API_KEY;
-if (!API_KEY) {
-  console.error("❌ Missing SUBSOURCE_API_KEY in environment variables");
-}
-
 const PORT = Number(process.env.PORT || 7000);
 const BASE_URL =
   process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`;
@@ -27,19 +23,29 @@ const BASE_URL =
 
 const manifest = {
   id: "community.subsource.subtitles",
-  version: "1.0.3",
-  name: "SubSource Subtitles (API)",
+  version: "1.0.4",
+  name: "SubSource Subtitles",
   description: "Subtitles from SubSource API",
   resources: ["subtitles"],
   types: ["movie", "series"],
   catalogs: [],
-  idPrefixes: ["tt"],
-
-  // ✅ THIS LINE IS REQUIRED
-  endpoint: "https://subsource-addon.onrender.com"
+  idPrefixes: ["tt"]
 };
 
 const builder = new addonBuilder(manifest);
+
+/* ================= Express App ================= */
+
+const app = express();
+
+/* --- CORS --- */
+app.use(cors());
+
+/* --- Global Request Logger --- */
+app.use((req, res, next) => {
+  console.log("🌐 Incoming request:", req.method, req.url);
+  next();
+});
 
 /* ================= Helpers ================= */
 
@@ -55,61 +61,77 @@ function parseStremioId(id) {
 /* ================= Subtitles Handler ================= */
 
 builder.defineSubtitlesHandler(async ({ type, id }) => {
-  console.log("🎬 Stremio request:", { type, id });
+  console.log("🎬 Subtitles handler triggered:", { type, id });
 
   const { imdbId, season, episode } = parseStremioId(id);
-  console.log("🔎 Parsed:", { imdbId, season, episode });
+  console.log("🔎 Parsed ID:", { imdbId, season, episode });
 
-  if (!API_KEY) return { subtitles: [] };
+  if (!API_KEY) {
+    console.log("❌ Missing API KEY");
+    return { subtitles: [] };
+  }
 
-  const movies = await searchMovies({ apiKey: API_KEY, imdbId });
-  console.log("📡 SubSource search result:", movies?.length);
+  try {
+    /* --- Search movie --- */
+    const movies = await searchMovies({ apiKey: API_KEY, imdbId });
+    console.log("📡 SubSource search results:", movies?.length || 0);
 
-  const first = movies?.[0];
-  if (!first) return { subtitles: [] };
+    const first = movies?.[0];
+    if (!first) {
+      console.log("⚠️ No movie found on SubSource");
+      return { subtitles: [] };
+    }
 
-  const movieId = first.movieId;
+    const movieId = first.movieId;
 
-  const subs = await getSubtitles({
-    apiKey: API_KEY,
-    movieId,
-    season,
-    episode
-  });
+    /* --- Fetch subtitles list --- */
+    const subs = await getSubtitles({
+      apiKey: API_KEY,
+      movieId,
+      season,
+      episode
+    });
 
-  console.log("💬 SubSource subtitles found:", subs?.length);
+    console.log("💬 Subtitles found:", subs?.length || 0);
 
-  if (!subs || !subs.length) return { subtitles: [] };
+    if (!subs || !subs.length) return { subtitles: [] };
 
-  const out = subs.map(s => {
-    const sid = s.subtitleId;
-    const langCode = toStremioLang(s.language || "eng");
+    /* --- Build Stremio subtitle entries --- */
+    const out = subs.map(s => {
+      const sid = s.subtitleId;
+      const langCode = toStremioLang(s.language || "eng");
 
-    return {
-      id: `subsource:${sid}:${langCode}`,
-      lang: langCode,
-      title: `${langCode.toUpperCase()} (SubSource)`,
-      url: `${BASE_URL}/download/${sid}?lang=${langCode}`
-    };
-  });
+      return {
+        id: `subsource:${sid}:${langCode}`,
+        lang: langCode,
+        title: `${langCode.toUpperCase()} (SubSource)`,
+        url: `${BASE_URL}/download/${sid}?lang=${langCode}`
+      };
+    });
 
-  return { subtitles: out };
+    console.log("✅ Returning subtitles to Stremio:", out.length);
+    return { subtitles: out };
+
+  } catch (err) {
+    console.log("❌ Handler error:", err.message);
+    return { subtitles: [] };
+  }
 });
 
-/* ================= Express Server ================= */
+/* ================= Routes ================= */
 
-const app = express();
-app.use(cors()); // ✅ Full CORS support
+const addonInterface = builder.getInterface();
 
 /* --- Manifest --- */
 app.get("/manifest.json", (req, res) => {
-  res.json(manifest);
+  console.log("📜 Manifest requested");
+  res.setHeader("Content-Type", "application/json");
+  res.status(200).send(JSON.stringify(manifest));
 });
 
-/* --- Stremio subtitles endpoint --- */
-const addonInterface = builder.getInterface();
-
+/* --- Subtitles Endpoint --- */
 app.get("/subtitles/:type/:id.json", async (req, res) => {
+  console.log("➡️ /subtitles route hit");
   try {
     const result = await addonInterface.runSubtitlesHandler({
       type: req.params.type,
@@ -117,18 +139,20 @@ app.get("/subtitles/:type/:id.json", async (req, res) => {
     });
     res.json(result);
   } catch (err) {
-    console.error("❌ Handler error:", err);
+    console.log("❌ Subtitles route error:", err.message);
     res.json({ subtitles: [] });
   }
 });
 
-/* --- Subtitle download endpoint --- */
+/* --- Subtitle Download --- */
 app.get("/download/:subtitleId", async (req, res) => {
+  console.log("⬇️ /download route hit");
+
   try {
     const subtitleId = req.params.subtitleId;
     const lang = String(req.query.lang || "eng");
 
-    console.log("⬇️ Download request:", subtitleId, lang);
+    console.log("📥 Downloading subtitle:", subtitleId, "lang:", lang);
 
     const zipBuf = await downloadSubtitleZip({
       apiKey: API_KEY,
@@ -140,8 +164,8 @@ app.get("/download/:subtitleId", async (req, res) => {
     });
 
     if (!best) {
-      res.status(404).send("No subtitle file in archive");
-      return;
+      console.log("⚠️ No text subtitle inside zip");
+      return res.status(404).send("No subtitle found");
     }
 
     const lower = best.name.toLowerCase();
@@ -153,14 +177,17 @@ app.get("/download/:subtitleId", async (req, res) => {
     res.setHeader("Content-Type", contentType);
     res.send(best.data);
 
+    console.log("✅ Subtitle delivered:", best.name);
+
   } catch (err) {
-    console.error("❌ Download error:", err.message);
+    console.log("❌ Download error:", err.message);
     res.status(500).send("Subtitle download failed");
   }
 });
 
-/* --- Start Server --- */
+/* ================= Start Server ================= */
+
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("✅ Server running on port", PORT);
-  console.log("🌍 Manifest:", `${BASE_URL}/manifest.json`);
+  console.log("🚀 Server running on port", PORT);
+  console.log("🌍 Manifest URL:", `${BASE_URL}/manifest.json`);
 });
