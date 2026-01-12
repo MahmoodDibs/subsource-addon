@@ -85,7 +85,9 @@ app.use((req, res, next) => {
 
 /* Manifest route */
 app.get("/manifest.json", (req, res) => {
-  res.json(manifest);
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.status(200).send(JSON.stringify(manifest));
 });
 
 /* Subtitles route */
