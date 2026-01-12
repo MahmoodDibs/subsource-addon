@@ -15,13 +15,14 @@ import { toStremioLang } from "./language.js";
 
 const API_KEY = process.env.SUBSOURCE_API_KEY;
 const PORT = Number(process.env.PORT || 10000);
-const BASE_URL = process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`;
+const BASE_URL =
+  process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`;
 
 /* ================= MANIFEST ================= */
 
 const manifest = {
   id: "community.subsource.subtitles",
-  version: "1.0.4",
+  version: "1.0.5",
   name: "SubSource Subtitles (API)",
   description: "Subtitles from SubSource API",
   resources: ["subtitles"],
@@ -46,24 +47,21 @@ function parseStremioId(id) {
 /* ================= SUBTITLES HANDLER ================= */
 
 builder.defineSubtitlesHandler(async ({ type, id }) => {
-  console.log("🎬 Handler called by Stremio:", { type, id });
+  console.log("🎬 Handler called:", { type, id });
 
   if (!API_KEY) {
-    console.error("❌ Missing API key");
+    console.log("❌ Missing SUBSOURCE_API_KEY");
     return { subtitles: [] };
   }
 
   const { imdbId, season, episode } = parseStremioId(id);
-  console.log("🔎 Parsed request:", { imdbId, season, episode });
+  console.log("🔎 Parsed:", { imdbId, season, episode });
 
   const movies = await searchMovies({ apiKey: API_KEY, imdbId });
   console.log("📡 Search results:", movies?.length || 0);
 
   const first = movies?.[0];
-  if (!first) {
-    console.log("⚠️ No movie found in SubSource");
-    return { subtitles: [] };
-  }
+  if (!first) return { subtitles: [] };
 
   const movieId = first.movieId;
 
@@ -90,7 +88,7 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
     };
   });
 
-  console.log("✅ Returning subtitles to Stremio:", out.length);
+  console.log("✅ Returning", out.length, "subtitles");
 
   return { subtitles: out };
 });
@@ -99,9 +97,9 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
 
 const app = express();
 
-/* --- Log every request --- */
+/* --- Global request logger --- */
 app.use((req, res, next) => {
-  console.log("🌐 Incoming request:", req.method, req.url);
+  console.log("🌍 Request:", req.method, req.url);
   next();
 });
 
@@ -111,13 +109,13 @@ app.get("/manifest.json", (req, res) => {
   res.json(manifest);
 });
 
-/* --- Download route --- */
+/* --- Subtitle download route --- */
 app.get("/download/:subtitleId", async (req, res) => {
   try {
     const subtitleId = req.params.subtitleId;
     const lang = String(req.query.lang || "eng");
 
-    console.log("⬇️ Download request:", subtitleId, lang);
+    console.log("⬇️ Download:", subtitleId, lang);
 
     const zipBuf = await downloadSubtitleZip({
       apiKey: API_KEY,
@@ -130,7 +128,7 @@ app.get("/download/:subtitleId", async (req, res) => {
 
     if (!best) {
       console.log("⚠️ No subtitle inside zip");
-      return res.status(404).send("No subtitle file in archive");
+      return res.status(404).send("No subtitle file");
     }
 
     const lower = best.name.toLowerCase();
@@ -148,12 +146,12 @@ app.get("/download/:subtitleId", async (req, res) => {
   }
 });
 
-/* --- Mount Stremio SDK interface --- */
+/* --- Mount Stremio SDK router --- */
 const addonInterface = builder.getInterface();
-app.use(addonInterface);
+app.use(addonInterface.router);   // ✅ THIS is the critical fix
 
 /* --- Start server --- */
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("✅ Server running on port", PORT);
+  console.log("✅ Server running on", PORT);
   console.log("🌍 Manifest:", `${BASE_URL}/manifest.json`);
 });
