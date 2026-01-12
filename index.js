@@ -22,7 +22,7 @@ const BASE_URL =
 
 const manifest = {
   id: "community.subsource.subtitles",
-  version: "1.0.5",
+  version: "1.0.6",
   name: "SubSource Subtitles (API)",
   description: "Subtitles from SubSource API",
   resources: ["subtitles"],
@@ -89,7 +89,6 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
   });
 
   console.log("✅ Returning", out.length, "subtitles");
-
   return { subtitles: out };
 });
 
@@ -97,7 +96,7 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
 
 const app = express();
 
-/* --- Global request logger --- */
+/* --- Log every request --- */
 app.use((req, res, next) => {
   console.log("🌍 Request:", req.method, req.url);
   next();
@@ -127,7 +126,7 @@ app.get("/download/:subtitleId", async (req, res) => {
     });
 
     if (!best) {
-      console.log("⚠️ No subtitle inside zip");
+      console.log("⚠️ No subtitle in archive");
       return res.status(404).send("No subtitle file");
     }
 
@@ -146,9 +145,9 @@ app.get("/download/:subtitleId", async (req, res) => {
   }
 });
 
-/* --- Mount Stremio SDK router --- */
+/* --- Mount Stremio SDK middleware --- */
 const addonInterface = builder.getInterface();
-app.use(addonInterface.router);   // ✅ THIS is the critical fix
+app.use(addonInterface);   // ✅ Correct for ESM SDK
 
 /* --- Start server --- */
 app.listen(PORT, "0.0.0.0", () => {
