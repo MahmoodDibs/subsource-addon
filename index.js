@@ -19,7 +19,8 @@ if (!API_KEY) {
 }
 
 const PORT = Number(process.env.PORT || 7000);
-const BASE_URL = process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`;
+const BASE_URL =
+  process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`;
 
 /* ================= Manifest ================= */
 
@@ -57,9 +58,7 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
 
   if (!API_KEY) return { subtitles: [] };
 
-  // --- Search movie by IMDb ---
   const movies = await searchMovies({ apiKey: API_KEY, imdbId });
-
   console.log("📡 SubSource search result:", movies?.length);
 
   const first = movies?.[0];
@@ -67,7 +66,6 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
 
   const movieId = first.movieId;
 
-  // --- Fetch subtitles list ---
   const subs = await getSubtitles({
     apiKey: API_KEY,
     movieId,
@@ -79,7 +77,6 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
 
   if (!subs || !subs.length) return { subtitles: [] };
 
-  // --- Build Stremio subtitle entries ---
   const out = subs.map(s => {
     const sid = s.subtitleId;
     const langCode = toStremioLang(s.language || "eng");
@@ -106,24 +103,30 @@ app.get("/manifest.json", (req, res) => {
   res.status(200).send(JSON.stringify(manifest));
 });
 
-/* --- Subtitles route for Stremio --- */
+/* --- Subtitles route (WITH CORS FIX) --- */
 const addonInterface = builder.getInterface();
 
 app.get("/subtitles/:type/:id.json", async (req, res) => {
+  // ✅ CORS headers so Stremio webview can call this endpoint
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+
   try {
     const result = await addonInterface.runSubtitlesHandler({
       type: req.params.type,
       id: req.params.id
     });
-    res.json(result);
+    res.status(200).send(JSON.stringify(result));
   } catch (err) {
     console.error("❌ Handler error:", err);
-    res.json({ subtitles: [] });
+    res.status(200).send(JSON.stringify({ subtitles: [] }));
   }
 });
 
-/* --- Subtitle download route --- */
+/* --- Subtitle download route (WITH CORS FIX) --- */
 app.get("/download/:subtitleId", async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+
   try {
     const subtitleId = req.params.subtitleId;
     const lang = String(req.query.lang || "eng");
@@ -152,7 +155,6 @@ app.get("/download/:subtitleId", async (req, res) => {
 
     res.setHeader("Content-Type", contentType);
     res.send(best.data);
-
   } catch (err) {
     console.error("❌ Download error:", err.message);
     res.status(500).send("Subtitle download failed");
