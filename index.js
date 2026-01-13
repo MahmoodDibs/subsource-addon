@@ -1,33 +1,36 @@
 import "dotenv/config";
 import express from "express";
 import StremioSDK from "stremio-addon-sdk";
+import AdmZip from "adm-zip"; // 📦 Required for "No Subtitle Left Behind"
+
 import {
   searchMovies,
   getSubtitles,
-  downloadSubtitleZip,
-  extractBestTextSubtitleFromZip
+  downloadSubtitleZip
 } from "./subsource.js";
+
 import { toStremioLang } from "./language.js";
 
 const { addonBuilder, getRouter } = StremioSDK;
 
 const API_KEY = process.env.SUBSOURCE_API_KEY;
-
-// ✅ Dynamic Configuration for Render vs Localhost
 const PORT = process.env.PORT || 7000;
 const BASE_URL = process.env.BASE_URL || `http://127.0.0.1:${PORT}`;
+
+// 📊 Global Stats for Dashboard
+let downloadStats = {
+    total: 0,
+    startTime: new Date().toLocaleString("en-US", { timeZone: "UTC" })
+};
 
 /* ===== Manifest ===== */
 
 const manifest = {
   id: "community.subsource.subtitles",
-  version: "1.0.1", // Bumped version
+  version: "1.1.0", // Major update!
   name: "SubSource Subtitles",
-  description: "Subtitles from SubSource API",
-  
-  // ✅ Logo pointing to your static file
+  description: "Advanced subtitles from SubSource API",
   logo: `${BASE_URL}/logo.png`, 
-  
   resources: ["subtitles"],
   types: ["movie", "series"],
   catalogs: [],
@@ -47,7 +50,7 @@ function parseStremioId(id) {
   };
 }
 
-/* ===== Subtitles Handler ===== */
+/* ===== Subtitles Handler (The Logic) ===== */
 
 builder.defineSubtitlesHandler(async ({ type, id }) => {
   console.log("🎬 Request:", type, id);
@@ -58,49 +61,80 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
   }
 
   const { imdbId, season, episode } = parseStremioId(id);
-  
-  // 1. Search for the movie/show
+
+  // 1. Search for movie
   const movies = await searchMovies({ apiKey: API_KEY, imdbId });
   const first = movies?.[0];
-  
   if (!first) return { subtitles: [] };
 
-  const movieId = first.movieId;
-
-  // 2. Get subtitle list
+  // 2. Get Subtitle List
   const subs = await getSubtitles({
     apiKey: API_KEY,
-    movieId,
+    movieId: first.movieId,
     season,
     episode
   });
 
-  console.log("💬 Subtitles found:", subs?.length || 0);
-
   if (!subs || !subs.length) return { subtitles: [] };
 
-  // 3. Format for Stremio
-  const out = subs.map(s => {
-    const sid = s.subtitleId;
-    const lang = toStremioLang(s.language || "eng");
+  console.log(`🔎 Found ${subs.length} subtitle packages. Processing top 3...`);
 
-    return {
-      id: `subsource:${sid}:${lang}`,
-      lang,
-      title: `${lang.toUpperCase()} (SubSource)`,
-      url: `${BASE_URL}/download/${sid}?lang=${lang}`
-    };
-  });
+  // 3. "No Subtitle Left Behind" Logic
+  // We only process the Top 3 results to prevent Stremio timeout.
+  // We download the zip *now* to see exactly what files are inside.
+  const topSubs = subs.slice(0, 3);
+  const allStreams = [];
 
-  return { subtitles: out };
+  // Use Promise.all to process zips in parallel (faster)
+  await Promise.all(topSubs.map(async (sub) => {
+    try {
+        const zipBuf = await downloadSubtitleZip({ apiKey: API_KEY, subtitleId: sub.subtitleId });
+        const zip = new AdmZip(zipBuf);
+        const zipEntries = zip.getEntries();
+
+        zipEntries.forEach((entry, index) => {
+            if (entry.isDirectory) return;
+            
+            const lowerName = entry.entryName.toLowerCase();
+            
+            // Filter only text subtitles
+            if (lowerName.endsWith(".srt") || lowerName.endsWith(".vtt")) {
+                
+                const lang = toStremioLang(sub.language || "eng");
+                
+                // Detect Tags
+                let tags = [];
+                if (lowerName.includes("hi") || lowerName.includes("sdh")) tags.push("HI");
+                if (lowerName.includes("forced")) tags.push("Forced");
+                if (lowerName.includes("bluray")) tags.push("BluRay");
+                if (lowerName.includes("web")) tags.push("Web");
+
+                const tagStr = tags.length ? ` [${tags.join(' ')}]` : "";
+
+                allStreams.push({
+                    // Unique ID: subId + language + fileIndex
+                    id: `subsource:${sub.subtitleId}:${lang}:${index}`,
+                    lang: lang,
+                    // Title: "📄 File.srt [HI] (SubSource)"
+                    title: `📄 ${entry.entryName}${tagStr} (SubSource)`,
+                    url: `${BASE_URL}/download/${sub.subtitleId}/${index}?lang=${lang}`
+                });
+            }
+        });
+    } catch (e) {
+        console.error(`⚠️ Failed to parse zip for ${sub.subtitleId}:`, e.message);
+    }
+  }));
+
+  console.log(`📤 Returning ${allStreams.length} specific subtitle files`);
+  return { subtitles: allStreams };
 });
 
 /* ===== SERVER SETUP (Express) ===== */
 
 const app = express();
 
-// 1. Serve Static Files (For logo.png)
-// Create a folder named "public" and put logo.png inside it
+// 1. Serve Static Files (Logo)
 app.use(express.static("public"));
 
 // 2. CORS Middleware
@@ -116,42 +150,81 @@ app.use((req, res, next) => {
     next();
 });
 
-// 3. Download Route (Defined BEFORE the addon router)
-app.get("/download/:subtitleId", async (req, res) => {
-    try {
-        const { subtitleId } = req.params;
-        const lang = req.query.lang || "eng";
-        
-        console.log(`⬇️  Processing Download: ${subtitleId} (${lang})`);
+// 3. 📊 Dashboard Route (Root URL)
+app.get("/", (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>SubSource Status</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                body { font-family: 'Segoe UI', sans-serif; background: #111; color: #eee; text-align: center; padding: 40px; }
+                .card { max-width: 500px; margin: 0 auto; background: #1e1e1e; padding: 40px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+                h1 { margin: 10px 0; font-size: 2rem; }
+                .stat { font-size: 4rem; font-weight: bold; color: #5c7cfa; margin: 20px 0; }
+                .label { color: #888; text-transform: uppercase; letter-spacing: 2px; font-size: 0.8rem; }
+                .footer { margin-top: 40px; font-size: 0.8rem; color: #555; }
+                img { width: 80px; height: 80px; border-radius: 12px; margin-bottom: 20px; }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <img src="/logo.png" onerror="this.style.display='none'">
+                <h1>SubSource Server</h1>
+                <p style="color: #4cd964;">● System Operational</p>
+                
+                <div class="stat">${downloadStats.total}</div>
+                <div class="label">Subtitles Delivered</div>
 
+                <div class="footer">
+                    Started: ${downloadStats.startTime} <br>
+                    Running on ${process.env.RENDER ? "Render Cloud" : "Localhost"}
+                </div>
+            </div>
+        </body>
+        </html>
+    `);
+});
+
+// 4. ⬇️ Download Route (Multi-File Support)
+app.get("/download/:subtitleId/:fileIndex", async (req, res) => {
+    try {
+        const { subtitleId, fileIndex } = req.params;
+        
+        // Increment Stats
+        downloadStats.total++;
+
+        console.log(`⬇️  Request: ID ${subtitleId}, Index ${fileIndex}`);
+
+        // Download Zip
         const zipBuf = await downloadSubtitleZip({ apiKey: API_KEY, subtitleId });
         
-        const best = extractBestTextSubtitleFromZip(zipBuf, { preferPatterns: [lang] });
+        // Extract Specific File
+        const zip = new AdmZip(zipBuf);
+        const entries = zip.getEntries();
+        const selectedEntry = entries[parseInt(fileIndex)];
 
-        if (!best) {
-            console.log("❌ No subtitle found in zip");
-            res.status(404).send("No subtitle found");
-            return;
+        if (!selectedEntry) {
+            return res.status(404).send("File not found in zip");
         }
 
-        const lower = best.name.toLowerCase();
+        const lower = selectedEntry.entryName.toLowerCase();
         const contentType = lower.endsWith(".vtt") 
             ? "text/vtt; charset=utf-8" 
             : "text/plain; charset=utf-8";
 
-        // ✅ Critical Headers for Stremio
+        // Headers
         res.writeHead(200, {
             "Content-Type": contentType,
-            "Content-Length": best.data.length, // Send explicit byte length
+            "Content-Length": selectedEntry.header.size,
             "Access-Control-Allow-Origin": "*",
             "Cache-Control": "public, max-age=86400",
-            "Content-Disposition": `inline; filename="${best.name}"`
+            "Content-Disposition": `inline; filename="${selectedEntry.entryName}"`
         });
-
-        console.log(`✅ Sending: ${best.name} (${best.data.length} bytes)`);
         
-        // ✅ Send RAW buffer (Prevents encoding corruption)
-        res.end(best.data);
+        // Send Raw Data
+        res.end(selectedEntry.getData());
 
     } catch (err) {
         console.error("❌ Download Error:", err.message);
@@ -159,13 +232,12 @@ app.get("/download/:subtitleId", async (req, res) => {
     }
 });
 
-// 4. Stremio Addon Interface
+// 5. Stremio Interface
 const addonInterface = builder.getInterface();
 const addonRouter = getRouter(addonInterface);
 app.use(addonRouter);
 
-// 5. Start Server
+// 6. Start
 app.listen(PORT, () => {
     console.log(`🚀 Server running at ${BASE_URL}`);
-    console.log(`🌍 Manifest URL: ${BASE_URL}/manifest.json`);
 });
