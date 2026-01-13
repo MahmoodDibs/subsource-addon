@@ -1,28 +1,26 @@
 import "dotenv/config";
-import express from "express";
-import { addonBuilder } from "stremio-addon-sdk";
-
+import express from "express"; // Import Express
+import StremioSDK from "stremio-addon-sdk";
 import {
   searchMovies,
   getSubtitles,
   downloadSubtitleZip,
   extractBestTextSubtitleFromZip
 } from "./subsource.js";
-
 import { toStremioLang } from "./language.js";
 
+const { addonBuilder, getRouter } = StremioSDK;
+
 const API_KEY = process.env.SUBSOURCE_API_KEY;
-const PORT = Number(process.env.PORT || 10000);
-const BASE_URL =
-  process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`;
+const PORT = 7000;
+const BASE_URL = `http://127.0.0.1:${PORT}`;
 
-/* ================= Manifest ================= */
-
+/* ===== Manifest ===== */
 const manifest = {
   id: "community.subsource.subtitles",
-  version: "1.0.5",
-  name: "SubSource Subtitles",
-  description: "External subtitles from SubSource API",
+  version: "1.0.0",
+  name: "SubSource Subtitles (Local)",
+  description: "Subtitles from SubSource API",
   resources: ["subtitles"],
   types: ["movie", "series"],
   catalogs: [],
@@ -31,8 +29,7 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-/* ================= Helpers ================= */
-
+/* ===== Subtitles Logic ===== */
 function parseStremioId(id) {
   const parts = String(id).split(":");
   return {
@@ -42,10 +39,8 @@ function parseStremioId(id) {
   };
 }
 
-/* ================= Subtitles Handler ================= */
-
 builder.defineSubtitlesHandler(async ({ type, id }) => {
-  console.log("🎬 Stremio request:", type, id);
+  console.log("🎬 Request:", type, id);
 
   if (!API_KEY) {
     console.error("❌ Missing SUBSOURCE_API_KEY");
@@ -53,102 +48,98 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
   }
 
   const { imdbId, season, episode } = parseStremioId(id);
-  console.log("🔎 Parsed:", { imdbId, season, episode });
-
   const movies = await searchMovies({ apiKey: API_KEY, imdbId });
-  console.log("📡 Search results:", movies?.length || 0);
-
   const first = movies?.[0];
+  
   if (!first) return { subtitles: [] };
 
   const movieId = first.movieId;
-
-  const subs = await getSubtitles({
-    apiKey: API_KEY,
-    movieId,
-    season,
-    episode
-  });
+  const subs = await getSubtitles({ apiKey: API_KEY, movieId, season, episode });
 
   console.log("💬 Subtitles found:", subs?.length || 0);
 
   if (!subs || !subs.length) return { subtitles: [] };
 
-  const out = subs.map(s => {
-    const sid = s.subtitleId;
-    const lang = toStremioLang(s.language || "eng");
-
-    return {
-      id: `subsource:${sid}:${lang}`,
-      lang,
-      title: `${lang.toUpperCase()} (SubSource)`,
-      url: `${BASE_URL}/download/${sid}?lang=${lang}`
-    };
-  });
-
-  console.log("📤 Returning", out.length, "subtitles");
-
-  return { subtitles: out };
+  return { 
+    subtitles: subs.map(s => {
+      const sid = s.subtitleId;
+      const lang = toStremioLang(s.language || "eng");
+      return {
+        id: `subsource:${sid}:${lang}`,
+        lang,
+        title: `${lang.toUpperCase()} (SubSource)`,
+        url: `${BASE_URL}/download/${sid}?lang=${lang}`
+      };
+    }) 
+  };
 });
 
-/* ================= Express ================= */
-
+/* ===== SERVER SETUP (Express) ===== */
 const app = express();
 
-/* ---- Global logger ---- */
+// 1. CORS Middleware (Essential for Stremio Web)
 app.use((req, res, next) => {
-  console.log("🌐 Incoming:", req.method, req.url);
-  next();
-});
-
-/* ---- Mount Stremio router correctly ---- */
-const addonInterface = builder.getInterface();
-app.use(addonInterface.router);   // <<< THIS is the important fix
-
-/* ---- Manifest ---- */
-app.get("/manifest.json", (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.json(manifest);
-});
-
-/* ---- Subtitle download ---- */
-app.get("/download/:subtitleId", async (req, res) => {
-  try {
-    const subtitleId = req.params.subtitleId;
-    const lang = String(req.query.lang || "eng");
-
-    console.log("⬇️ Download:", subtitleId, lang);
-
-    const zipBuf = await downloadSubtitleZip({
-      apiKey: API_KEY,
-      subtitleId
-    });
-
-    const best = extractBestTextSubtitleFromZip(zipBuf, {
-      preferPatterns: [lang]
-    });
-
-    if (!best) {
-      res.status(404).send("No subtitle in archive");
-      return;
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
     }
-
-    const lower = best.name.toLowerCase();
-    const contentType =
-      lower.endsWith(".vtt")
-        ? "text/vtt; charset=utf-8"
-        : "application/x-subrip; charset=utf-8";
-
-    res.setHeader("Content-Type", contentType);
-    res.send(best.data);
-  } catch (err) {
-    console.error("❌ Download error:", err.message);
-    res.status(500).send("Subtitle download failed");
-  }
+    next();
 });
 
-/* ---- Start ---- */
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("✅ Server running on", PORT);
-  console.log("🌍 Manifest:", `${BASE_URL}/manifest.json`);
+// 2. Custom Download Route (Defined BEFORE the addon)
+app.get("/download/:subtitleId", async (req, res) => {
+    try {
+        const { subtitleId } = req.params;
+        const lang = req.query.lang || "eng";
+        
+        console.log(`⬇️  Processing Download: ${subtitleId} (${lang})`);
+
+        const zipBuf = await downloadSubtitleZip({ apiKey: API_KEY, subtitleId });
+        
+        const best = extractBestTextSubtitleFromZip(zipBuf, { preferPatterns: [lang] });
+
+        if (!best) {
+            console.log("❌ No subtitle found in zip");
+            res.status(404).send("No subtitle found");
+            return;
+        }
+
+        const lower = best.name.toLowerCase();
+        const contentType = lower.endsWith(".vtt") 
+            ? "text/vtt; charset=utf-8" 
+            : "text/plain; charset=utf-8";
+
+        // Send Headers
+        res.writeHead(200, {
+            "Content-Type": contentType,
+            "Content-Length": best.data.length,
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=86400",
+            "Content-Disposition": `inline; filename="${best.name}"`
+        });
+
+        console.log(`✅ Sending: ${best.name} (${best.data.length} bytes)`);
+        
+        // Send RAW buffer (Fixes encoding issues)
+        res.end(best.data);
+
+    } catch (err) {
+        console.error("❌ Download Error:", err.message);
+        if (!res.headersSent) res.status(500).send("Download failed");
+    }
+});
+
+// 3. Mount Stremio Addon (Handles /manifest.json etc.)
+const addonInterface = builder.getInterface();
+const addonRouter = getRouter(addonInterface);
+app.use(addonRouter);
+
+// 4. Start Server
+app.listen(PORT, () => {
+    console.log(`🚀 Server running at http://127.0.0.1:${PORT}`);
+    console.log(`🌍 Manifest URL: http://127.0.0.1:${PORT}/manifest.json`);
 });
