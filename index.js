@@ -1,8 +1,6 @@
 import "dotenv/config";
 import express from "express";
-import StremioSDK from "stremio-addon-sdk";
-
-const { addonBuilder } = StremioSDK;
+import { addonBuilder } from "stremio-addon-sdk";
 
 import {
   searchMovies,
@@ -15,16 +13,15 @@ import { toStremioLang } from "./language.js";
 
 const API_KEY = process.env.SUBSOURCE_API_KEY;
 const PORT = Number(process.env.PORT || 10000);
-const BASE_URL =
-  process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`;
+const BASE_URL = process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`;
 
-/* ================= MANIFEST ================= */
+/* ================= Manifest ================= */
 
 const manifest = {
   id: "community.subsource.subtitles",
-  version: "1.0.6",
-  name: "SubSource Subtitles (API)",
-  description: "Subtitles from SubSource API",
+  version: "1.0.4",
+  name: "SubSource Subtitles",
+  description: "External subtitles from SubSource API",
   resources: ["subtitles"],
   types: ["movie", "series"],
   catalogs: [],
@@ -33,7 +30,7 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-/* ================= HELPERS ================= */
+/* ================= Utilities ================= */
 
 function parseStremioId(id) {
   const parts = String(id).split(":");
@@ -44,18 +41,18 @@ function parseStremioId(id) {
   };
 }
 
-/* ================= SUBTITLES HANDLER ================= */
+/* ================= Subtitles Handler ================= */
 
 builder.defineSubtitlesHandler(async ({ type, id }) => {
-  console.log("🎬 Handler called:", { type, id });
+  console.log("🎬 Stremio request:", type, id);
 
   if (!API_KEY) {
-    console.log("❌ Missing SUBSOURCE_API_KEY");
+    console.error("❌ Missing API key");
     return { subtitles: [] };
   }
 
   const { imdbId, season, episode } = parseStremioId(id);
-  console.log("🔎 Parsed:", { imdbId, season, episode });
+  console.log("🔎 Parsed ID:", { imdbId, season, episode });
 
   const movies = await searchMovies({ apiKey: API_KEY, imdbId });
   console.log("📡 Search results:", movies?.length || 0);
@@ -78,37 +75,42 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
 
   const out = subs.map(s => {
     const sid = s.subtitleId;
-    const langCode = toStremioLang(s.language || "eng");
+    const lang = toStremioLang(s.language || "eng");
 
     return {
-      id: `subsource:${sid}:${langCode}`,
-      lang: langCode,
-      title: `${langCode.toUpperCase()} (SubSource)`,
-      url: `${BASE_URL}/download/${sid}?lang=${langCode}`
+      id: `subsource:${sid}:${lang}`,
+      lang,
+      title: `${lang.toUpperCase()} (SubSource)`,
+      url: `${BASE_URL}/download/${sid}?lang=${lang}`
     };
   });
 
-  console.log("✅ Returning", out.length, "subtitles");
+  console.log("📤 Returning subtitles:", out.length);
+
   return { subtitles: out };
 });
 
-/* ================= EXPRESS APP ================= */
+/* ================= Express ================= */
 
 const app = express();
 
-/* --- Log every request --- */
+/* ---- Log all incoming ---- */
 app.use((req, res, next) => {
-  console.log("🌍 Request:", req.method, req.url);
+  console.log("🌐 Incoming:", req.method, req.url);
   next();
 });
 
-/* --- Manifest route --- */
+/* ---- Mount Stremio SDK ---- */
+const addonInterface = builder.getInterface();
+app.use(addonInterface);
+
+/* ---- Manifest ---- */
 app.get("/manifest.json", (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.json(manifest);
 });
 
-/* --- Subtitle download route --- */
+/* ---- Subtitle download ---- */
 app.get("/download/:subtitleId", async (req, res) => {
   try {
     const subtitleId = req.params.subtitleId;
@@ -126,8 +128,8 @@ app.get("/download/:subtitleId", async (req, res) => {
     });
 
     if (!best) {
-      console.log("⚠️ No subtitle in archive");
-      return res.status(404).send("No subtitle file");
+      res.status(404).send("No subtitle in archive");
+      return;
     }
 
     const lower = best.name.toLowerCase();
@@ -145,25 +147,7 @@ app.get("/download/:subtitleId", async (req, res) => {
   }
 });
 
-/* --- Mount Stremio SDK middleware --- */
-const addonInterface = builder.getInterface();
-
-console.log("🔧 addonInterface type:", typeof addonInterface);
-console.log("🔧 addonInterface keys:", Object.keys(addonInterface || {}));
-
-if (typeof addonInterface === "function") {
-  app.use(addonInterface); 
-  console.log("✅ Mounted addonInterface directly");
-} 
-else if (addonInterface.router) {
-  app.use(addonInterface.router);
-  console.log("✅ Mounted addonInterface.router");
-} 
-else {
-  console.error("❌ Invalid addonInterface shape:", addonInterface);
-}
-
-/* --- Start server --- */
+/* ---- Start ---- */
 app.listen(PORT, "0.0.0.0", () => {
   console.log("✅ Server running on", PORT);
   console.log("🌍 Manifest:", `${BASE_URL}/manifest.json`);
