@@ -12,8 +12,8 @@ import { toStremioLang } from "./language.js";
 const { addonBuilder, getRouter } = StremioSDK;
 
 const API_KEY = process.env.SUBSOURCE_API_KEY;
-const PORT = 7000;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+const PORT = process.env.PORT || 7000;
+const BASE_URL = process.env.BASE_URL || `http://127.0.0.1:${PORT}`;
 
 /* ===== Manifest ===== */
 const manifest = {
