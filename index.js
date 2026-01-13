@@ -13,13 +13,14 @@ import { toStremioLang } from "./language.js";
 
 const API_KEY = process.env.SUBSOURCE_API_KEY;
 const PORT = Number(process.env.PORT || 10000);
-const BASE_URL = process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`;
+const BASE_URL =
+  process.env.RENDER_EXTERNAL_URL || `http://127.0.0.1:${PORT}`;
 
 /* ================= Manifest ================= */
 
 const manifest = {
   id: "community.subsource.subtitles",
-  version: "1.0.4",
+  version: "1.0.5",
   name: "SubSource Subtitles",
   description: "External subtitles from SubSource API",
   resources: ["subtitles"],
@@ -30,7 +31,7 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-/* ================= Utilities ================= */
+/* ================= Helpers ================= */
 
 function parseStremioId(id) {
   const parts = String(id).split(":");
@@ -47,12 +48,12 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
   console.log("🎬 Stremio request:", type, id);
 
   if (!API_KEY) {
-    console.error("❌ Missing API key");
+    console.error("❌ Missing SUBSOURCE_API_KEY");
     return { subtitles: [] };
   }
 
   const { imdbId, season, episode } = parseStremioId(id);
-  console.log("🔎 Parsed ID:", { imdbId, season, episode });
+  console.log("🔎 Parsed:", { imdbId, season, episode });
 
   const movies = await searchMovies({ apiKey: API_KEY, imdbId });
   console.log("📡 Search results:", movies?.length || 0);
@@ -85,7 +86,7 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
     };
   });
 
-  console.log("📤 Returning subtitles:", out.length);
+  console.log("📤 Returning", out.length, "subtitles");
 
   return { subtitles: out };
 });
@@ -94,15 +95,15 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
 
 const app = express();
 
-/* ---- Log all incoming ---- */
+/* ---- Global logger ---- */
 app.use((req, res, next) => {
   console.log("🌐 Incoming:", req.method, req.url);
   next();
 });
 
-/* ---- Mount Stremio SDK ---- */
+/* ---- Mount Stremio router correctly ---- */
 const addonInterface = builder.getInterface();
-app.use(addonInterface);
+app.use(addonInterface.router);   // <<< THIS is the important fix
 
 /* ---- Manifest ---- */
 app.get("/manifest.json", (req, res) => {
@@ -140,7 +141,6 @@ app.get("/download/:subtitleId", async (req, res) => {
 
     res.setHeader("Content-Type", contentType);
     res.send(best.data);
-
   } catch (err) {
     console.error("❌ Download error:", err.message);
     res.status(500).send("Subtitle download failed");
