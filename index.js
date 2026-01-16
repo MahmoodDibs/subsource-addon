@@ -1,7 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import StremioSDK from "stremio-addon-sdk";
-import AdmZip from "adm-zip"; // 📦 Required for "No Subtitle Left Behind"
+import AdmZip from "adm-zip"; 
 
 import {
   searchMovies,
@@ -17,7 +17,7 @@ const API_KEY = process.env.SUBSOURCE_API_KEY;
 const PORT = process.env.PORT || 7000;
 const BASE_URL = process.env.BASE_URL || `http://127.0.0.1:${PORT}`;
 
-// 📊 Global Stats for Dashboard
+// 📊 Global Stats
 let downloadStats = {
     total: 0,
     startTime: new Date().toLocaleString("en-US", { timeZone: "UTC" })
@@ -27,7 +27,7 @@ let downloadStats = {
 
 const manifest = {
   id: "community.subsource.subtitles",
-  version: "1.1.0", // Major update!
+  version: "1.1.1", 
   name: "SubSource Subtitles",
   description: "Advanced subtitles from SubSource API",
   logo: `${BASE_URL}/logo.png`, 
@@ -50,7 +50,7 @@ function parseStremioId(id) {
   };
 }
 
-/* ===== Subtitles Handler (The Logic) ===== */
+/* ===== Subtitles Handler ===== */
 
 builder.defineSubtitlesHandler(async ({ type, id }) => {
   console.log("🎬 Request:", type, id);
@@ -77,55 +77,39 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
 
   if (!subs || !subs.length) return { subtitles: [] };
 
-  console.log(`🔎 Found ${subs.length} subtitle packages. Processing top 3...`);
-
-  // 3. "No Subtitle Left Behind" Logic
-  // We only process the Top 3 results to prevent Stremio timeout.
-  // We download the zip *now* to see exactly what files are inside.
+  // 3. Process Subtitles
   const topSubs = subs.slice(0, 3);
   const allStreams = [];
 
-  // Use Promise.all to process zips in parallel (faster)
   await Promise.all(topSubs.map(async (sub) => {
     try {
         const zipBuf = await downloadSubtitleZip({ apiKey: API_KEY, subtitleId: sub.subtitleId });
         const zip = new AdmZip(zipBuf);
         const zipEntries = zip.getEntries();
 
+        // Calculate language ONCE here (outside the file loop if it applies to the whole zip, 
+        // OR inside if you prefer. Here we do it inside to be safe).
+        
         zipEntries.forEach((entry, index) => {
             if (entry.isDirectory) return;
             
             const lowerName = entry.entryName.toLowerCase();
             
-            // Filter only text subtitles
             if (lowerName.endsWith(".srt") || lowerName.endsWith(".vtt")) {
-
-                // DEBUG LOG: See what raw language the API gave us
-                console.log(`🔍 Raw Language: "${sub.language}"`); 
-
+                
+                // ✅ FIXED: Only declared ONCE here
                 const lang = toStremioLang(sub.language);
                 
-                // DEBUG LOG: See what we converted it to
-                console.log(`➡️ Converted to: "${lang}"`);
-
-                /* ... rest of your code ... */
-                
-                const lang = toStremioLang(sub.language || "eng");
-                
-                // Detect Tags
                 let tags = [];
                 if (lowerName.includes("hi") || lowerName.includes("sdh")) tags.push("HI");
                 if (lowerName.includes("forced")) tags.push("Forced");
                 if (lowerName.includes("bluray")) tags.push("BluRay");
-                if (lowerName.includes("web")) tags.push("Web");
-
+                
                 const tagStr = tags.length ? ` [${tags.join(' ')}]` : "";
 
                 allStreams.push({
-                    // Unique ID: subId + language + fileIndex
                     id: `subsource:${sub.subtitleId}:${lang}:${index}`,
                     lang: lang,
-                    // Title: "📄 File.srt [HI] (SubSource)"
                     title: `📄 ${entry.entryName}${tagStr} (SubSource)`,
                     url: `${BASE_URL}/download/${sub.subtitleId}/${index}?lang=${lang}`
                 });
@@ -136,18 +120,15 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
     }
   }));
 
-  console.log(`📤 Returning ${allStreams.length} specific subtitle files`);
   return { subtitles: allStreams };
 });
 
-/* ===== SERVER SETUP (Express) ===== */
+/* ===== SERVER SETUP ===== */
 
 const app = express();
 
-// 1. Serve Static Files (Logo)
 app.use(express.static("public"));
 
-// 2. CORS Middleware
 app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "*");
@@ -160,71 +141,35 @@ app.use((req, res, next) => {
     next();
 });
 
-// 3. 📊 Dashboard Route (Root URL)
 app.get("/", (req, res) => {
     res.send(`
         <!DOCTYPE html>
         <html>
-        <head>
-            <title>SubSource Status</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <style>
-                body { font-family: 'Segoe UI', sans-serif; background: #111; color: #eee; text-align: center; padding: 40px; }
-                .card { max-width: 500px; margin: 0 auto; background: #1e1e1e; padding: 40px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-                h1 { margin: 10px 0; font-size: 2rem; }
-                .stat { font-size: 4rem; font-weight: bold; color: #5c7cfa; margin: 20px 0; }
-                .label { color: #888; text-transform: uppercase; letter-spacing: 2px; font-size: 0.8rem; }
-                .footer { margin-top: 40px; font-size: 0.8rem; color: #555; }
-                img { width: 80px; height: 80px; border-radius: 12px; margin-bottom: 20px; }
-            </style>
-        </head>
-        <body>
-            <div class="card">
-                <img src="/logo.png" onerror="this.style.display='none'">
-                <h1>SubSource Server</h1>
-                <p style="color: #4cd964;">● System Operational</p>
-                
-                <div class="stat">${downloadStats.total}</div>
-                <div class="label">Subtitles Delivered</div>
-
-                <div class="footer">
-                    Started: ${downloadStats.startTime} <br>
-                    Running on ${process.env.RENDER ? "Render Cloud" : "Localhost"}
-                </div>
-            </div>
+        <head><title>SubSource Status</title></head>
+        <body style="background:#111;color:#fff;font-family:sans-serif;text-align:center;padding:50px;">
+            <img src="/logo.png" width="80">
+            <h1>SubSource Server Online</h1>
+            <p>Downloads: ${downloadStats.total}</p>
         </body>
         </html>
     `);
 });
 
-// 4. ⬇️ Download Route (Multi-File Support)
 app.get("/download/:subtitleId/:fileIndex", async (req, res) => {
     try {
         const { subtitleId, fileIndex } = req.params;
-        
-        // Increment Stats
         downloadStats.total++;
 
-        console.log(`⬇️  Request: ID ${subtitleId}, Index ${fileIndex}`);
-
-        // Download Zip
         const zipBuf = await downloadSubtitleZip({ apiKey: API_KEY, subtitleId });
-        
-        // Extract Specific File
         const zip = new AdmZip(zipBuf);
         const entries = zip.getEntries();
         const selectedEntry = entries[parseInt(fileIndex)];
 
-        if (!selectedEntry) {
-            return res.status(404).send("File not found in zip");
-        }
+        if (!selectedEntry) return res.status(404).send("File not found");
 
         const lower = selectedEntry.entryName.toLowerCase();
-        const contentType = lower.endsWith(".vtt") 
-            ? "text/vtt; charset=utf-8" 
-            : "text/plain; charset=utf-8";
+        const contentType = lower.endsWith(".vtt") ? "text/vtt; charset=utf-8" : "text/plain; charset=utf-8";
 
-        // Headers
         res.writeHead(200, {
             "Content-Type": contentType,
             "Content-Length": selectedEntry.header.size,
@@ -233,7 +178,6 @@ app.get("/download/:subtitleId/:fileIndex", async (req, res) => {
             "Content-Disposition": `inline; filename="${selectedEntry.entryName}"`
         });
         
-        // Send Raw Data
         res.end(selectedEntry.getData());
 
     } catch (err) {
@@ -242,12 +186,10 @@ app.get("/download/:subtitleId/:fileIndex", async (req, res) => {
     }
 });
 
-// 5. Stremio Interface
 const addonInterface = builder.getInterface();
 const addonRouter = getRouter(addonInterface);
 app.use(addonRouter);
 
-// 6. Start
 app.listen(PORT, () => {
     console.log(`🚀 Server running at ${BASE_URL}`);
 });
