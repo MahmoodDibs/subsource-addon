@@ -99,6 +99,16 @@ builder.defineSubtitlesHandler(async ({ type, id }) => {
             
             // Filter only text subtitles
             if (lowerName.endsWith(".srt") || lowerName.endsWith(".vtt")) {
+
+                // DEBUG LOG: See what raw language the API gave us
+                console.log(`🔍 Raw Language: "${sub.language}"`); 
+
+                const lang = toStremioLang(sub.language);
+                
+                // DEBUG LOG: See what we converted it to
+                console.log(`➡️ Converted to: "${lang}"`);
+
+                /* ... rest of your code ... */
                 
                 const lang = toStremioLang(sub.language || "eng");
                 

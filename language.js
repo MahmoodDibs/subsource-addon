@@ -1,53 +1,75 @@
-// Minimal language normalization for Stremio "lang" field.
-// Stremio commonly accepts ISO-639-2 (3-letter) like "eng", "ara", "tur".
-
-const MAP_2_TO_3 = {
-  en: "eng",
-  ar: "ara",
-  tr: "tur",
-  fr: "fra",
-  es: "spa",
-  de: "deu",
-  it: "ita",
-  ru: "rus",
-  nl: "nld",
-  pt: "por",
-  fa: "fas",
-  ur: "urd",
-  hi: "hin",
-  id: "ind",
-  ms: "msa",
-  pl: "pol",
-  ro: "ron",
-  sv: "swe",
-  no: "nor",
-  da: "dan",
-  fi: "fin",
-  el: "ell",
-  he: "heb",
-  uk: "ukr",
-  vi: "vie",
-  zh: "zho",
-  ja: "jpn",
-  ko: "kor"
+// Master mapping of [Name/Code] -> [Stremio 3-Letter Code]
+// Stremio prefers ISO 639-2 codes (e.g., "tur", "ara", "eng")
+const LANG_MAP = {
+    // Common Languages
+    "arabic": "ara", "ar": "ara", "ara": "ara",
+    "english": "eng", "en": "eng", "eng": "eng",
+    "turkish": "tur", "tr": "tur", "tur": "tur",
+    "spanish": "spa", "es": "spa", "spa": "spa",
+    "french": "fre", "fr": "fre", "fre": "fre", "fra": "fre",
+    "german": "ger", "de": "ger", "ger": "ger", "deu": "ger",
+    "italian": "ita", "it": "ita", "ita": "ita",
+    "portuguese": "por", "pt": "por", "por": "por",
+    "russian": "rus", "ru": "rus", "rus": "rus",
+    
+    // Asian / Others
+    "japanese": "jpn", "ja": "jpn", "jpn": "jpn",
+    "korean": "kor", "ko": "kor", "kor": "kor",
+    "chinese": "chi", "zh": "chi", "chi": "chi", "zho": "chi",
+    "mandarin": "chi",
+    "vietnamese": "vie", "vi": "vie", "vie": "vie",
+    "thai": "tha", "th": "tha", "tha": "tha",
+    "indonesian": "ind", "id": "ind", "ind": "ind",
+    "malay": "msa", "ms": "msa", "msa": "msa",
+    "hindi": "hin", "hi": "hin", "hin": "hin",
+    
+    // European / Others
+    "dutch": "dut", "nl": "dut", "dut": "dut", "nld": "dut",
+    "polish": "pol", "pl": "pol", "pol": "pol",
+    "romanian": "rum", "ro": "rum", "rum": "rum", "ron": "rum",
+    "greek": "gre", "el": "gre", "gre": "gre", "ell": "gre",
+    "czech": "cze", "cs": "cze", "cze": "cze", "ces": "cze",
+    "hungarian": "hun", "hu": "hun", "hun": "hun",
+    "swedish": "swe", "sv": "swe", "swe": "swe",
+    "norwegian": "nor", "no": "nor", "nor": "nor",
+    "danish": "dan", "da": "dan", "dan": "dan",
+    "finnish": "fin", "fi": "fin", "fin": "fin",
+    "ukrainian": "ukr", "uk": "ukr", "ukr": "ukr",
+    "hebrew": "heb", "he": "heb", "heb": "heb",
+    "persian": "per", "fa": "per", "per": "per", "fas": "per", "farsi": "per",
+    "croatian": "hrv", "hr": "hrv", "hrv": "hrv", "scr": "hrv",
+    "serbian": "srp", "sr": "srp", "srp": "srp", "scc": "srp",
+    "bulgarian": "bul", "bg": "bul", "bul": "bul",
+    
+    // Add specific Brazilian Portuguese if needed
+    "brazilian": "pob", "pt-br": "pob", "pob": "pob"
 };
 
 export function toStremioLang(lang) {
-  if (!lang) return "eng";
-  const s = String(lang).trim().toLowerCase();
+    if (!lang) return "eng";
+    
+    // 1. Clean the input (remove spaces, lowercase)
+    const s = String(lang).trim().toLowerCase();
 
-  // already 3 letters
-  if (/^[a-z]{3}$/.test(s)) return s;
+    // 2. Check the Master Map (Fastest)
+    if (LANG_MAP[s]) {
+        return LANG_MAP[s];
+    }
 
-  // common 2 letters
-  if (MAP_2_TO_3[s]) return MAP_2_TO_3[s];
+    // 3. Fallback: If it looks like a code (2 or 3 letters), return it as is
+    // This catches obscure languages we missed in the map
+    if (s.length === 3) return s; 
+    if (s.length === 2) return s; // Stremio tries to handle 2-letter codes too
 
-  // try things like "english" -> eng
-  if (s.startsWith("eng")) return "eng";
-  if (s.startsWith("arab")) return "ara";
-  if (s.startsWith("tur")) return "tur";
-  if (s.startsWith("fre") || s.startsWith("fra") || s.includes("french")) return "fra";
-  if (s.startsWith("spa") || s.includes("spanish")) return "spa";
+    // 4. Fuzzy Matches (for messy API data like "Spanish (Latin)")
+    if (s.includes("spani")) return "spa";
+    if (s.includes("portu")) return "por";
+    if (s.includes("brazi")) return "pob";
+    if (s.includes("frenc")) return "fre";
+    if (s.includes("arab")) return "ara";
+    if (s.includes("turk")) return "tur";
+    if (s.includes("germ")) return "ger";
 
-  return "eng";
+    // 5. Final Default
+    return "eng";
 }
